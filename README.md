@@ -1,10 +1,8 @@
 # PySnooper - Never use print for debugging again #
 
-[![Travis CI](https://img.shields.io/travis/cool-RR/PySnooper/master.svg)](https://travis-ci.org/cool-RR/PySnooper)
+**PySnooper** is a poor man's debugger. If you've used Bash, it's like `set -x` for Python, except it's fancier.
 
-**PySnooper** is a poor man's debugger.
-
-You're trying to figure out why your Python code isn't doing what you think it should be doing. You'd love to use a full-fledged debugger with breakpoints and watches, but you can't be bothered to set one up right now.
+Your story: You're trying to figure out why your Python code isn't doing what you think it should be doing. You'd love to use a full-fledged debugger with breakpoints and watches, but you can't be bothered to set one up right now.
 
 You want to know which lines are running and which aren't, and what the values of the local variables are.
 
@@ -64,6 +62,7 @@ Modified var:.. bits = [1, 1, 0]
 15:29:11.327032 line        10         return bits
 15:29:11.327032 return      10         return bits
 Return value:.. [1, 1, 0]
+Elapsed time: 00:00:00.000001
 ```
 
 Or if you don't want to trace an entire function, you can wrap the relevant part in a `with` block:
@@ -99,6 +98,7 @@ New var:....... upper = 832
 74 453.0 832
 New var:....... mid = 453.0
 09:37:35.882486 line        13         print(lower, mid, upper)
+Elapsed time: 00:00:00.000344
 ```
 
 # Features #
@@ -126,18 +126,26 @@ Show snoop lines for functions that your function calls:
 **See [Advanced Usage](https://github.com/cool-RR/PySnooper/blob/master/ADVANCED_USAGE.md) for more options.** <------
 
 
-# Installation #
+# Installation with Pip #
 
-You can install **PySnooper** by:
+The best way to install **PySnooper** is with Pip:
 
-* pip:
 ```console
 $ pip install pysnooper
 ```
 
-* conda with conda-forge channel:
+# Other installation options #
+
+Conda with conda-forge channel:
+
 ```console
 $ conda install -c conda-forge pysnooper
+```
+
+Arch Linux:
+
+```console
+$ yay -S python-pysnooper
 ```
 
 

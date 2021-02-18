@@ -4,6 +4,7 @@
 import io
 import textwrap
 import threading
+import time
 import types
 import os
 import sys
@@ -15,7 +16,9 @@ import pysnooper
 from pysnooper.variables import needs_parentheses
 from .utils import (assert_output, assert_sample_output, VariableEntry,
                     CallEntry, LineEntry, ReturnEntry, OpcodeEntry,
-                    ReturnValueEntry, ExceptionEntry, SourcePathEntry)
+                    ReturnValueEntry, ExceptionEntry, ExceptionValueEntry,
+                    SourcePathEntry, CallEndedByExceptionEntry,
+                    ElapsedTimeEntry)
 from . import mini_toolbox
 
 
@@ -44,7 +47,138 @@ def test_string_io():
             LineEntry('return y + x'),
             ReturnEntry('return y + x'),
             ReturnValueEntry('15'),
+            ElapsedTimeEntry(),
         )
+    )
+
+
+def test_relative_time():
+    snoop = pysnooper.snoop(relative_time=True)
+
+    def foo(x):
+        if x == 0:
+            bar1(x)
+            qux()
+            return
+
+        with snoop:
+            # There should be line entries for these three lines,
+            # no line entries for anything else in this function,
+            # but calls to all bar functions should be traced
+            foo(x - 1)
+            bar2(x)
+            qux()
+        int(4)
+        bar3(9)
+        return x
+
+    @snoop
+    def bar1(_x):
+        qux()
+
+    @snoop
+    def bar2(_x):
+        qux()
+
+    @snoop
+    def bar3(_x):
+        qux()
+
+    def qux():
+        time.sleep(0.1)
+        return 9  # not traced, mustn't show up
+
+    with mini_toolbox.OutputCapturer(stdout=False,
+                                     stderr=True) as output_capturer:
+        result = foo(2)
+    assert result == 2
+    output = output_capturer.string_io.getvalue()
+    assert_output(
+        output,
+        (
+            # In first with
+            SourcePathEntry(),
+            VariableEntry('x', '2'),
+            VariableEntry('bar1'),
+            VariableEntry('bar2'),
+            VariableEntry('bar3'),
+            VariableEntry('foo'),
+            VariableEntry('qux'),
+            VariableEntry('snoop'),
+            LineEntry('foo(x - 1)'),
+
+            # In with in recursive call
+            VariableEntry('x', '1'),
+            VariableEntry('bar1'),
+            VariableEntry('bar2'),
+            VariableEntry('bar3'),
+            VariableEntry('foo'),
+            VariableEntry('qux'),
+            VariableEntry('snoop'),
+            LineEntry('foo(x - 1)'),
+
+            # Call to bar1 from if block outside with
+            VariableEntry('_x', '0'),
+            VariableEntry('qux'),
+            CallEntry('def bar1(_x):'),
+            LineEntry('qux()'),
+            ReturnEntry('qux()'),
+            ReturnValueEntry('None'),
+            ElapsedTimeEntry(0.1),
+
+            # In with in recursive call
+            LineEntry('bar2(x)'),
+
+            # Call to bar2 from within with
+            VariableEntry('_x', '1'),
+            VariableEntry('qux'),
+            CallEntry('def bar2(_x):'),
+            LineEntry('qux()'),
+            ReturnEntry('qux()'),
+            ReturnValueEntry('None'),
+            ElapsedTimeEntry(0.1),
+
+            # In with in recursive call
+            LineEntry('qux()'),
+            ElapsedTimeEntry(0.4),
+
+            # Call to bar3 from after with
+            VariableEntry('_x', '9'),
+            VariableEntry('qux'),
+            CallEntry('def bar3(_x):'),
+            LineEntry('qux()'),
+            ReturnEntry('qux()'),
+            ReturnValueEntry('None'),
+            ElapsedTimeEntry(0.1),
+
+            # -- Similar to previous few sections,
+            # -- but from first call to foo
+
+            # In with in first call
+            LineEntry('bar2(x)'),
+
+            # Call to bar2 from within with
+            VariableEntry('_x', '2'),
+            VariableEntry('qux'),
+            CallEntry('def bar2(_x):'),
+            LineEntry('qux()'),
+            ReturnEntry('qux()'),
+            ReturnValueEntry('None'),
+            ElapsedTimeEntry(0.1),
+
+            # In with in first call
+            LineEntry('qux()'),
+            ElapsedTimeEntry(0.7),
+
+            # Call to bar3 from after with
+            VariableEntry('_x', '9'),
+            VariableEntry('qux'),
+            CallEntry('def bar3(_x):'),
+            LineEntry('qux()'),
+            ReturnEntry('qux()'),
+            ReturnValueEntry('None'),
+            ElapsedTimeEntry(0.1),
+        ),
     )
 
 
@@ -74,6 +208,7 @@ def test_thread_info():
             LineEntry('return y + x'),
             ReturnEntry('return y + x'),
             ReturnValueEntry('15'),
+            ElapsedTimeEntry(),
         )
     )
 
@@ -125,6 +260,7 @@ def test_multi_thread_info():
                           name="MainThread")),
             ReturnEntry('return y + x'),
             ReturnValueEntry('15'),
+            ElapsedTimeEntry(),
             VariableEntry('foo', value_regex="u?'bubu'"),
             CallEntry('def my_function(foo):',
                       thread_info_regex=thread_info_regex.format(
@@ -142,6 +278,7 @@ def test_multi_thread_info():
                           name="test123")),
             ReturnEntry('return y + x'),
             ReturnValueEntry('15'),
+            ElapsedTimeEntry(),
             VariableEntry('foo', value_regex="u?'bibi'"),
             CallEntry('def my_function(foo):',
                       thread_info_regex=thread_info_regex.format(name='bibi')),
@@ -155,6 +292,7 @@ def test_multi_thread_info():
                       thread_info_regex=thread_info_regex.format(name='bibi')),
             ReturnEntry('return y + x'),
             ReturnValueEntry('15'),
+            ElapsedTimeEntry(),
         )
     )
 
@@ -188,6 +326,7 @@ def test_callable(normalize):
             LineEntry('return y + x'),
             ReturnEntry('return y + x'),
             ReturnValueEntry('15'),
+            ElapsedTimeEntry(),
         ),
         normalize=normalize,
     )
@@ -240,7 +379,8 @@ def test_watch(normalize):
             VariableEntry('len(foo.__dict__["x"] * "abc")', '48'),
             LineEntry(),
             ReturnEntry(),
-            ReturnValueEntry('None')
+            ReturnValueEntry('None'),
+            ElapsedTimeEntry(),
         ),
         normalize=normalize,
     )
@@ -291,7 +431,8 @@ def test_watch_explode(normalize):
             VariableEntry('(lst + [])[3]', '10'),
             VariableEntry('lst + []'),
             ReturnEntry(),
-            ReturnValueEntry('None')
+            ReturnValueEntry('None'),
+            ElapsedTimeEntry(),
         ),
         normalize=normalize,
     )
@@ -342,7 +483,8 @@ def test_variables_classes(normalize):
             VariableEntry('_lst[998]', '998'),
             VariableEntry('_lst[999]', '999'),
             ReturnEntry(),
-            ReturnValueEntry('None')
+            ReturnValueEntry('None'),
+            ElapsedTimeEntry(),
         ),
         normalize=normalize,
     )
@@ -384,7 +526,8 @@ def test_single_watch_no_comma(normalize):
             LineEntry(),
             LineEntry(),
             ReturnEntry(),
-            ReturnValueEntry('None')
+            ReturnValueEntry('None'),
+            ElapsedTimeEntry(),
         ),
         normalize=normalize,
     )
@@ -412,7 +555,8 @@ def test_long_variable(normalize):
             VariableEntry('foo', value_regex=regex),
             LineEntry(),
             ReturnEntry(),
-            ReturnValueEntry(value_regex=regex)
+            ReturnValueEntry(value_regex=regex),
+            ElapsedTimeEntry(),
         ),
         normalize=normalize,
     )
@@ -440,7 +584,8 @@ def test_long_variable_with_custom_max_variable_length(normalize):
             VariableEntry('foo', value_regex=regex),
             LineEntry(),
             ReturnEntry(),
-            ReturnValueEntry(value_regex=regex)
+            ReturnValueEntry(value_regex=regex),
+            ElapsedTimeEntry(),
         ),
         normalize=normalize,
     )
@@ -468,7 +613,8 @@ def test_long_variable_with_infinite_max_variable_length(normalize):
             VariableEntry('foo', value_regex=regex),
             LineEntry(),
             ReturnEntry(),
-            ReturnValueEntry(value_regex=regex)
+            ReturnValueEntry(value_regex=regex),
+            ElapsedTimeEntry(),
         ),
         normalize=normalize,
     )
@@ -498,7 +644,8 @@ def test_repr_exception(normalize):
             LineEntry('bad = Bad()'),
             VariableEntry('bad', value='REPR FAILED'),
             ReturnEntry(),
-            ReturnValueEntry('None')
+            ReturnValueEntry('None'),
+            ElapsedTimeEntry(),
         ),
         normalize=normalize,
     )
@@ -561,6 +708,7 @@ def test_depth(normalize):
             LineEntry(),
             ReturnEntry(),
             ReturnValueEntry('20'),
+            ElapsedTimeEntry(),
         ),
         normalize=normalize,
     )
@@ -600,6 +748,7 @@ def test_method_and_prefix(normalize):
             LineEntry(prefix='ZZZ'),
             ReturnEntry(prefix='ZZZ'),
             ReturnValueEntry(prefix='ZZZ'),
+            ElapsedTimeEntry(prefix='ZZZ'),
         ),
         prefix='ZZZ',
         normalize=normalize,
@@ -634,6 +783,7 @@ def test_file_output(normalize):
                 LineEntry('return y + x'),
                 ReturnEntry('return y + x'),
                 ReturnValueEntry('15'),
+                ElapsedTimeEntry(),
             ),
             normalize=normalize,
         )
@@ -679,6 +829,7 @@ def test_confusing_decorator_lines(normalize):
             # back in my_function
             ReturnEntry(),
             ReturnValueEntry('15'),
+            ElapsedTimeEntry(),
         ),
         normalize=normalize,
     )
@@ -700,6 +851,7 @@ def test_lambda(normalize):
             LineEntry(source_regex='^my_function = pysnooper.*'),
             ReturnEntry(source_regex='^my_function = pysnooper.*'),
             ReturnValueEntry('49'),
+            ElapsedTimeEntry(),
         ),
         normalize=normalize,
     )
@@ -734,6 +886,7 @@ def test_unavailable_source():
                 LineEntry('SOURCE IS UNAVAILABLE'),
                 ReturnEntry('SOURCE IS UNAVAILABLE'),
                 ReturnValueEntry('7'),
+                ElapsedTimeEntry(),
             )
         )
 
@@ -767,6 +920,7 @@ def test_no_overwrite_by_default():
                 LineEntry('return y + x'),
                 ReturnEntry('return y + x'),
                 ReturnValueEntry('15'),
+                ElapsedTimeEntry(),
             )
         )
 
@@ -800,6 +954,7 @@ def test_overwrite():
                 LineEntry('return y + x'),
                 ReturnEntry('return y + x'),
                 ReturnValueEntry('15'),
+                ElapsedTimeEntry(),
 
                 VariableEntry('foo', value_regex="u?'baba'"),
                 CallEntry('def my_function(foo):'),
@@ -810,6 +965,7 @@ def test_overwrite():
                 LineEntry('return y + x'),
                 ReturnEntry('return y + x'),
                 ReturnValueEntry('15'),
+                ElapsedTimeEntry(),
             )
         )
 
@@ -914,6 +1070,7 @@ def test_with_block(normalize):
             LineEntry('qux()'),
             ReturnEntry('qux()'),
             ReturnValueEntry('None'),
+            ElapsedTimeEntry(),
 
             # In with in recursive call
             LineEntry('bar2(x)'),
@@ -925,9 +1082,11 @@ def test_with_block(normalize):
             LineEntry('qux()'),
             ReturnEntry('qux()'),
             ReturnValueEntry('None'),
+            ElapsedTimeEntry(),
 
             # In with in recursive call
             LineEntry('qux()'),
+            ElapsedTimeEntry(),
 
             # Call to bar3 from after with
             VariableEntry('_x', '9'),
@@ -936,6 +1095,7 @@ def test_with_block(normalize):
             LineEntry('qux()'),
             ReturnEntry('qux()'),
             ReturnValueEntry('None'),
+            ElapsedTimeEntry(),
 
             # -- Similar to previous few sections,
             # -- but from first call to foo
@@ -950,9 +1110,11 @@ def test_with_block(normalize):
             LineEntry('qux()'),
             ReturnEntry('qux()'),
             ReturnValueEntry('None'),
+            ElapsedTimeEntry(),
 
             # In with in first call
             LineEntry('qux()'),
+            ElapsedTimeEntry(),
 
             # Call to bar3 from after with
             VariableEntry('_x', '9'),
@@ -961,6 +1123,7 @@ def test_with_block(normalize):
             LineEntry('qux()'),
             ReturnEntry('qux()'),
             ReturnValueEntry('None'),
+            ElapsedTimeEntry(),
         ),
         normalize=normalize,
     )
@@ -1020,6 +1183,7 @@ def test_with_block_depth(normalize):
             LineEntry(),
             ReturnEntry(),
             ReturnValueEntry('20'),
+            ElapsedTimeEntry(),
         ),
         normalize=normalize,
     )
@@ -1086,6 +1250,7 @@ def test_cellvars(normalize):
             ReturnValueEntry(),
             ReturnEntry(),
             ReturnValueEntry(),
+            ElapsedTimeEntry(),
         ),
         normalize=normalize,
     )
@@ -1133,6 +1298,7 @@ def test_var_order(normalize):
             VariableEntry("seven", "7"),
             ReturnEntry(),
             ReturnValueEntry(),
+            ElapsedTimeEntry(),
         ),
         normalize=normalize,
     )
@@ -1207,6 +1373,7 @@ def test_generator():
             LineEntry(),
             ReturnEntry(),
             ReturnValueEntry('0'),
+            ElapsedTimeEntry(),
 
             # Pause and resume:
 
@@ -1223,6 +1390,7 @@ def test_generator():
             LineEntry(),
             ReturnEntry(),
             ReturnValueEntry('2'),
+            ElapsedTimeEntry(),
 
             # Pause and resume:
 
@@ -1238,7 +1406,7 @@ def test_generator():
             LineEntry(),
             ReturnEntry(),
             ReturnValueEntry(None),
-
+            ElapsedTimeEntry(),
         )
     )
 
@@ -1285,6 +1453,7 @@ def test_custom_repr(normalize):
             LineEntry(),
             ReturnEntry(),
             ReturnValueEntry('49995000'),
+            ElapsedTimeEntry(),
         ),
         normalize=normalize,
     )
@@ -1313,6 +1482,7 @@ def test_custom_repr_single(normalize):
             LineEntry(),
             ReturnEntry(),
             ReturnValueEntry('7'),
+            ElapsedTimeEntry(),
         ),
         normalize=normalize,
     )
@@ -1363,6 +1533,7 @@ def test_class(normalize):
             LineEntry('self.x = 7'),
             ReturnEntry('self.x = 7'),
             ReturnValueEntry('None'),
+            ElapsedTimeEntry(),
             VariableEntry('self', value_regex="u?.+MyClass object"),
             VariableEntry('foo', value_regex="u?'baba'"),
             CallEntry('def my_method(self, foo):'),
@@ -1371,6 +1542,7 @@ def test_class(normalize):
             LineEntry('return y + self.x'),
             ReturnEntry('return y + self.x'),
             ReturnValueEntry('15'),
+            ElapsedTimeEntry(),
         ),
         normalize=normalize,
     )
@@ -1409,6 +1581,7 @@ def test_class_with_decorated_method(normalize):
             LineEntry('self.x = 7'),
             ReturnEntry('self.x = 7'),
             ReturnValueEntry('None'),
+            ElapsedTimeEntry(),
             VariableEntry('args', value_regex=r"\(<.+>, 'baba'\)"),
             VariableEntry('kwargs', value_regex=r"\{\}"),
             VariableEntry('function', value_regex="u?.+my_method"),
@@ -1418,6 +1591,7 @@ def test_class_with_decorated_method(normalize):
             LineEntry('return result'),
             ReturnEntry('return result'),
             ReturnValueEntry('15'),
+            ElapsedTimeEntry(),
         ),
         normalize=normalize,
     )
@@ -1457,6 +1631,7 @@ def test_class_with_decorated_method_and_snoop_applied_to_method(normalize):
             LineEntry('self.x = 7'),
             ReturnEntry('self.x = 7'),
             ReturnValueEntry('None'),
+            ElapsedTimeEntry(),
             VariableEntry('args', value_regex=r"u?\(<.+>, 'baba'\)"),
             VariableEntry('kwargs', value_regex=r"u?\{\}"),
             VariableEntry('function', value_regex="u?.*my_method"),
@@ -1471,10 +1646,12 @@ def test_class_with_decorated_method_and_snoop_applied_to_method(normalize):
             LineEntry('return y + self.x'),
             ReturnEntry('return y + self.x'),
             ReturnValueEntry('15'),
+            ElapsedTimeEntry(),
             VariableEntry('result', '15'),
             LineEntry('return result'),
             ReturnEntry('return result'),
             ReturnValueEntry('15'),
+            ElapsedTimeEntry(),
         ),
         normalize=normalize,
     )
@@ -1531,6 +1708,7 @@ def test_class_with_property(normalize):
             LineEntry('self._x = 0'),
             ReturnEntry('self._x = 0'),
             ReturnValueEntry('None'),
+            ElapsedTimeEntry(),
 
             # Called from getter
             VariableEntry('self', value_regex="u?.*MyClass object"),
@@ -1538,6 +1716,7 @@ def test_class_with_property(normalize):
             LineEntry('pass'),
             ReturnEntry('pass'),
             ReturnValueEntry('None'),
+            ElapsedTimeEntry(),
 
             # Called from setter
             VariableEntry('self', value_regex="u?.*MyClass object"),
@@ -1545,6 +1724,7 @@ def test_class_with_property(normalize):
             LineEntry('pass'),
             ReturnEntry('pass'),
             ReturnValueEntry('None'),
+            ElapsedTimeEntry(),
 
             # Called from deleter
             VariableEntry('self', value_regex="u?.*MyClass object"),
@@ -1552,6 +1732,7 @@ def test_class_with_property(normalize):
             LineEntry('pass'),
             ReturnEntry('pass'),
             ReturnValueEntry('None'),
+            ElapsedTimeEntry(),
         ),
         normalize=normalize,
     )
@@ -1589,6 +1770,7 @@ def test_snooping_on_class_does_not_cause_base_class_to_be_snooped(normalize):
             LineEntry('self.method_on_base_class()'),
             ReturnEntry('self.method_on_base_class()'),
             ReturnValueEntry('None'),
+            ElapsedTimeEntry(),
         ),
         normalize=normalize,
     )
@@ -1625,6 +1807,7 @@ def test_normalize():
                 LineEntry('return res'),
                 ReturnEntry('return res'),
                 ReturnValueEntry('41'),
+                ElapsedTimeEntry(),
             )
     )
 
@@ -1661,6 +1844,7 @@ def test_normalize_prefix():
                 LineEntry('return res', prefix=_prefix),
                 ReturnEntry('return res', prefix=_prefix),
                 ReturnValueEntry('41', prefix=_prefix),
+                ElapsedTimeEntry(prefix=_prefix),
             )
     )
 
@@ -1681,3 +1865,39 @@ def test_normalize_thread_info():
 
     with pytest.raises(NotImplementedError):
         add()
+
+
+def test_exception():
+    string_io = io.StringIO()
+    @pysnooper.snoop(string_io)
+    def f():
+        x = 8
+        raise MemoryError
+
+    with pytest.raises(MemoryError):
+        f()
+
+    output = string_io.getvalue()
+    assert_output(
+        output,
+        (
+            SourcePathEntry(),
+            CallEntry(),
+            LineEntry(),
+            VariableEntry(),
+            LineEntry(),
+            ExceptionEntry(),
+            ExceptionValueEntry('MemoryError'),
+            CallEndedByExceptionEntry(),
+            ElapsedTimeEntry(),
+        )
+    )
+
+
+def test_exception_on_entry():
+    @pysnooper.snoop()
+    def f(x):
+        pass
+
+    with pytest.raises(TypeError):
+        f()

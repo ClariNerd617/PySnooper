@@ -80,3 +80,16 @@ else:
         return result
 
 
+def timedelta_format(timedelta):
+    time = (datetime_module.datetime.min + timedelta).time()
+    return time_isoformat(time, timespec='microseconds')
+
+def timedelta_parse(s):
+    hours, minutes, seconds, microseconds = map(
+        int,
+        s.replace('.', ':').split(':')
+    )
+    return datetime_module.timedelta(hours=hours, minutes=minutes,
+                                     seconds=seconds,
+                                     microseconds=microseconds)
+
